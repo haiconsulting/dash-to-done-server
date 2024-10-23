@@ -173,3 +173,70 @@ server.listen(port, () => {
 if (process.env.NODE_ENV === 'production') {
   renewCertificate().catch(console.error);
 }
+
+app.post('/chunk-task', async (req, res) => {
+  const { task } = req.body;
+
+  if (!process.env.REACT_APP_OPENAI_API_KEY) {
+    console.error('OpenAI API key is not set');
+    return res.status(500).json({ error: 'OpenAI API key is not set. Please check your environment variables.' });
+  }
+
+  try {
+    console.log('Chunking task:', task);
+
+    const thread = await openai.beta.threads.create();
+
+    await openai.beta.threads.messages.create(thread.id, {
+      role: "user",
+      content: `Please chunk this task into smaller subtasks: ${task.title}\n\nDescription: ${task.description}`
+    });
+
+    const run = await openai.beta.threads.runs.create(thread.id, {
+      assistant_id: ASSISTANT_ID
+    });
+
+    let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+    while (runStatus.status !== 'completed') {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+    }
+
+    const messages = await openai.beta.threads.messages.list(thread.id);
+
+    const assistantMessage = messages.data.find(message => message.role === 'assistant');
+    if (!assistantMessage) {
+      throw new Error('No response from assistant');
+    }
+
+    const chunkedTasksString = assistantMessage.content[0].text.value;
+    let parsedChunkedTasks;
+
+    try {
+      parsedChunkedTasks = JSON.parse(chunkedTasksString);
+    } catch (error) {
+      console.error('Error parsing JSON:', error);
+      throw new Error('Invalid JSON response from assistant');
+    }
+
+    if (!Array.isArray(parsedChunkedTasks.tasks)) {
+      throw new Error('Invalid chunked tasks format in assistant response');
+    }
+
+    const chunkedTasks = parsedChunkedTasks.tasks.map(chunkedTask => ({
+      id: Date.now() + Math.random(),
+      title: chunkedTask.title,
+      description: chunkedTask.description || '',
+      status: 'To Do',
+      assigned_team_member: task.assigned_team_member,
+      assigned_team_member_id: task.assigned_team_member_id,
+      parent_task_id: task.id
+    }));
+
+    console.log('Chunked tasks:', chunkedTasks);
+    res.json({ chunkedTasks });
+  } catch (error) {
+    console.error('Error chunking task:', error);
+    res.status(500).json({ error: 'Failed to chunk task', details: error.message });
+  }
+});
