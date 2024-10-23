@@ -2,11 +2,16 @@ const express = require('express');
 const OpenAI = require('openai');
 const cors = require('cors');
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const path = require('path');
+const https = require('https');
+const http = require('http');
+const { exec } = require('child_process');
 require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 3001;
+const httpPort = 80;
+const httpsPort = 443;
 
 const ASSISTANT_ID = process.env.ASSISTANT_KEY;
 const openai = new OpenAI({ apiKey: process.env.REACT_APP_OPENAI_API_KEY });
@@ -121,6 +126,62 @@ app.get('/load-state', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+// Function to check if certificates exist
+const certificatesExist = () => {
+  const keyPath = path.join(__dirname, 'certificates', 'private.key');
+  const certPath = path.join(__dirname, 'certificates', 'certificate.crt');
+  return fsSync.existsSync(keyPath) && fsSync.existsSync(certPath);
+};
+
+// Function to generate/renew certificate
+const renewCertificate = () => {
+  return new Promise((resolve, reject) => {
+    exec('./generate-ip-cert.sh -ip "your.actual.public.ip"', (error, stdout, stderr) => {
+      if (error) {
+        console.error(`Error renewing certificate: ${error}`);
+        reject(error);
+      } else {
+        console.log(`Certificate renewed: ${stdout}`);
+        resolve();
+      }
+    });
+  });
+};
+
+// Renew certificate every 90 days if running in production
+if (process.env.NODE_ENV === 'production') {
+  setInterval(renewCertificate, 90 * 24 * 60 * 60 * 1000);
+}
+
+let server;
+
+if (certificatesExist()) {
+  // Create HTTPS server
+  server = https.createServer({
+    key: fsSync.readFileSync(path.join(__dirname, 'certificates', 'private.key')),
+    cert: fsSync.readFileSync(path.join(__dirname, 'certificates', 'certificate.crt'))
+  }, app);
+
+  // Create HTTP server that redirects to HTTPS
+  http.createServer((req, res) => {
+    res.writeHead(301, { "Location": "https://" + req.headers['host'] + req.url });
+    res.end();
+  }).listen(httpPort, () => {
+    console.log(`HTTP Server running on port ${httpPort} (redirecting to HTTPS)`);
+  });
+
+  server.listen(httpsPort, () => {
+    console.log(`HTTPS Server running on port ${httpsPort}`);
+  });
+} else {
+  console.warn('SSL certificates not found. Running in HTTP mode.');
+  server = http.createServer(app);
+  server.listen(httpPort, () => {
+    console.log(`HTTP Server running on port ${httpPort}`);
+  });
+}
+
+// Initial certificate generation (only in production)
+if (process.env.NODE_ENV === 'production') {
+  renewCertificate().catch(console.error);
+}
