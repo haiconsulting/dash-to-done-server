@@ -10,8 +10,7 @@ const { exec } = require('child_process');
 require('dotenv').config();
 
 const app = express();
-const httpPort = 80;
-const httpsPort = 443;
+const port = process.env.PORT || 3000;
 
 const ASSISTANT_ID = process.env.ASSISTANT_KEY;
 const openai = new OpenAI({ apiKey: process.env.REACT_APP_OPENAI_API_KEY });
@@ -161,25 +160,14 @@ if (certificatesExist()) {
     key: fsSync.readFileSync(path.join(__dirname, 'certificates', 'private.key')),
     cert: fsSync.readFileSync(path.join(__dirname, 'certificates', 'certificate.crt'))
   }, app);
-
-  // Create HTTP server that redirects to HTTPS
-  http.createServer((req, res) => {
-    res.writeHead(301, { "Location": "https://" + req.headers['host'] + req.url });
-    res.end();
-  }).listen(httpPort, () => {
-    console.log(`HTTP Server running on port ${httpPort} (redirecting to HTTPS)`);
-  });
-
-  server.listen(httpsPort, () => {
-    console.log(`HTTPS Server running on port ${httpsPort}`);
-  });
 } else {
   console.warn('SSL certificates not found. Running in HTTP mode.');
   server = http.createServer(app);
-  server.listen(httpPort, () => {
-    console.log(`HTTP Server running on port ${httpPort}`);
-  });
 }
+
+server.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
 
 // Initial certificate generation (only in production)
 if (process.env.NODE_ENV === 'production') {
